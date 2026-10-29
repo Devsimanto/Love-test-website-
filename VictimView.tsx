@@ -2,12 +2,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import confetti from 'canvas-confetti';
 import { motion, AnimatePresence } from 'motion/react';
 import { Heart, HeartCrack, Sparkles, Mail, Award, RefreshCw, Volume2, VolumeX } from 'lucide-react';
-import { LetterData } from '../types';
-import { sound } from '../utils/audio';
-import { Language, translations } from '../utils/i18n';
+import { LetterData } from './types';
+import { sound } from './audio';
+import { Language, translations } from './i18n';
 import { LanguageToggle } from './LanguageToggle';
-import { getLetterDirect, pushLetterEventDirect, _REQ_VAL } from '../services/letterService';
-import { subscribeToLetter } from '../firebase';
+import { getLetterDirect, pushLetterEventDirect, _REQ_VAL, decodeSecret } from './letterService';
+import { subscribeToLetter } from './firebase';
 
 interface VictimViewProps {
   letterId: string;
@@ -25,7 +25,6 @@ export const VictimView: React.FC<VictimViewProps> = ({ letterId }) => {
   const [status, setStatus] = useState<'pending' | 'in_progress' | 'unlocked' | 'rejected'>('pending');
   const [revealedMessage, setRevealedMessage] = useState<string | null>(null);
 
-  // Position of moving "I love you" button
   const [loveBtnPos, setLoveBtnPos] = useState<{ x: number; y: number; isFloating: boolean; scale: number; rotation: number }>({
     x: 0,
     y: 0,
@@ -41,16 +40,25 @@ export const VictimView: React.FC<VictimViewProps> = ({ letterId }) => {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    loadLetterData();
+    loadLetterData(true);
 
-    // Direct Firestore real-time listener
     const unsub = subscribeToLetter(letterId, (liveLetter) => {
       if (liveLetter) {
-        setLetter(liveLetter);
-        setClicks(liveLetter.currentClicks || 0);
-        setStatus(liveLetter.status || 'pending');
-        if (liveLetter.status === 'unlocked' && liveLetter.secretMessage) {
-          setRevealedMessage(liveLetter.secretMessage);
+        setLetter((prev) => ({ ...prev, ...liveLetter }));
+        setClicks((prev) => Math.max(prev, liveLetter.currentClicks || 0));
+        setStatus((prev) => {
+          if (prev === 'unlocked' || liveLetter.status === 'unlocked' || (liveLetter.currentClicks || 0) >= _REQ_VAL) {
+            return 'unlocked';
+          }
+          if (prev === 'rejected' || liveLetter.status === 'rejected') {
+            return 'rejected';
+          }
+          return liveLetter.status || prev;
+        });
+
+        if ((liveLetter.status === 'unlocked' || (liveLetter.currentClicks || 0) >= _REQ_VAL) && liveLetter.secretMessage) {
+          const decoded = decodeSecret(liveLetter.secretMessage, liveLetter.adminToken || '');
+          setRevealedMessage(decoded || liveLetter.secretMessage);
         }
       }
     });
@@ -58,23 +66,29 @@ export const VictimView: React.FC<VictimViewProps> = ({ letterId }) => {
     return () => unsub();
   }, [letterId]);
 
-  const loadLetterData = async () => {
+  const loadLetterData = async (isInitial = false) => {
     try {
-      setLoading(true);
+      if (isInitial) setLoading(true);
       const res = await getLetterDirect(letterId);
       setLetter(res.letter);
-      setClicks(res.letter.currentClicks || 0);
-      setStatus(res.letter.status || 'pending');
+      setClicks((prev) => Math.max(prev, res.letter.currentClicks || 0));
+      setStatus((prev) => {
+        if (prev === 'unlocked' || res.letter.status === 'unlocked' || (res.letter.currentClicks || 0) >= _REQ_VAL) {
+          return 'unlocked';
+        }
+        return res.letter.status || prev;
+      });
       if (res.letter.secretMessage) {
         setRevealedMessage(res.letter.secretMessage);
       }
 
-      // Record 'opened' event
-      sendEventDirect('opened');
+      if (isInitial) {
+        sendEventDirect('opened');
+      }
     } catch (err: any) {
-      setError(err.message || 'Error loading letter');
+      if (isInitial) setError(err.message || 'Error loading letter');
     } finally {
-      setLoading(false);
+      if (isInitial) setLoading(false);
     }
   };
 
@@ -85,7 +99,6 @@ export const VictimView: React.FC<VictimViewProps> = ({ letterId }) => {
         setRevealedMessage(updated.secretMessage);
       }
     } catch (e) {
-      // Fallback to REST API if any
       fetch(`/api/letters/${letterId}/event`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -129,17 +142,21 @@ export const VictimView: React.FC<VictimViewProps> = ({ letterId }) => {
       ]);
     }
 
-    // Check if target threshold met
+    // ২৫তম ক্লিকের আনলক লজিক
     if (nextClick >= _REQ_VAL) {
       setStatus('unlocked');
-      sendEventDirect('click_love');
       if (soundEnabled) sound.playVictoryHarp();
       triggerConfetti();
-      setTimeout(() => loadLetterData(), 300);
+
+      if (letter?.secretMessage) {
+        const decoded = decodeSecret(letter.secretMessage, letter.adminToken || '');
+        setRevealedMessage(decoded || letter.secretMessage);
+      }
+
+      sendEventDirect('click_love');
       return;
     }
 
-    // Random safe position
     const randX = Math.floor(Math.random() * 70) + 12;
     const randY = Math.floor(Math.random() * 64) + 16;
 
@@ -236,7 +253,6 @@ export const VictimView: React.FC<VictimViewProps> = ({ letterId }) => {
           : 'bg-gradient-to-br from-rose-100 via-pink-100 to-rose-200 text-slate-800'
       }`}
     >
-      {/* Top Navbar with Language Toggle and Sound Controls */}
       <div className="absolute top-4 left-4 right-4 z-50 flex items-center justify-between pointer-events-none">
         <div className="pointer-events-auto">
           <LanguageToggle currentLang={lang} onToggle={(newLang) => setLang(newLang)} />
@@ -250,7 +266,6 @@ export const VictimView: React.FC<VictimViewProps> = ({ letterId }) => {
         </button>
       </div>
 
-      {/* Floating mini hearts animation on click */}
       {floatingHearts.map((h) => (
         <motion.div
           key={h.id}
@@ -264,16 +279,13 @@ export const VictimView: React.FC<VictimViewProps> = ({ letterId }) => {
         </motion.div>
       ))}
 
-      {/* Main Container */}
       <div className={`w-full max-w-lg mx-auto flex flex-col items-center transition-transform duration-200 ${shake ? 'animate-bounce' : ''}`}>
 
-        {/* Header Ribbon / Greeting */}
         <motion.div
           initial={{ y: -20, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
           className="text-center mb-5 mt-6"
         >
-          {/* Mystery warning banner */}
           <div className="inline-flex items-center gap-2 px-4 py-2 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-amber-900 text-xs sm:text-sm font-bold shadow-sm mb-3">
             <Sparkles className="w-4 h-4 text-amber-600 shrink-0 animate-spin" />
             <span>{t.victimMysteryNotice}</span>
@@ -284,7 +296,6 @@ export const VictimView: React.FC<VictimViewProps> = ({ letterId }) => {
           <p className="text-sm text-slate-600 mt-1">{t.fromLabel} <span className="font-semibold text-rose-600">{letter.senderName}</span></p>
         </motion.div>
 
-        {/* 3D Envelope & Letter Display */}
         <div className="relative w-full max-w-md aspect-[4/3] flex items-center justify-center my-2">
           
           {/* Unlocked Letter View */}
@@ -400,7 +411,6 @@ export const VictimView: React.FC<VictimViewProps> = ({ letterId }) => {
           )}
         </div>
 
-        {/* Progress & Encouragement Section (WITHOUT any filling progress bar line) */}
         {status !== 'unlocked' && status !== 'rejected' && (
           <div className="w-full max-w-md bg-white/85 backdrop-blur-md rounded-2xl p-4 shadow-lg border border-rose-200 mb-6 text-center">
             <div className="flex justify-between items-center text-xs font-semibold text-slate-600 mb-1.5">
@@ -414,11 +424,9 @@ export const VictimView: React.FC<VictimViewProps> = ({ letterId }) => {
           </div>
         )}
 
-        {/* Decision & Action Area */}
         {status !== 'unlocked' && status !== 'rejected' && (
           <div className="w-full max-w-md flex flex-col items-center gap-4">
             
-            {/* The Big "I hate you" Button */}
             <motion.button
               whileHover={{ scale: 1.03 }}
               whileTap={{ scale: 0.96 }}
@@ -429,7 +437,6 @@ export const VictimView: React.FC<VictimViewProps> = ({ letterId }) => {
               <span>{t.hateBtn}</span>
             </motion.button>
 
-            {/* Static Initial "I love you" Button (Before first click) */}
             {!loveBtnPos.isFloating && (
               <div className="flex flex-col items-center mt-2">
                 <span className="text-[11px] text-slate-500 mb-1 animate-pulse">
@@ -451,7 +458,6 @@ export const VictimView: React.FC<VictimViewProps> = ({ letterId }) => {
 
       </div>
 
-      {/* Floating / Teleporting "I love you" Button */}
       {status !== 'unlocked' && status !== 'rejected' && loveBtnPos.isFloating && (
         <motion.div
           animate={{
@@ -486,7 +492,6 @@ export const VictimView: React.FC<VictimViewProps> = ({ letterId }) => {
         </motion.div>
       )}
 
-      {/* Footer Branding Note */}
       <div className="mt-8 text-center text-[11px] text-slate-500">
         {t.footerNote}
       </div>
