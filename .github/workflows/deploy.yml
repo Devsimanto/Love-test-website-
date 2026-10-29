@@ -27,7 +27,27 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
+
+      - name: Ensure correct folder structure
+        run: |
+          if [ ! -d "src" ]; then
+            echo "Auto-organizing flat files into src structure..."
+            mkdir -p src/components src/services src/utils
+            [ -f "main.tsx" ] && cp main.tsx src/
+            [ -f "App.tsx" ] && cp App.tsx src/
+            [ -f "index.css" ] && cp index.css src/
+            [ -f "firebase.ts" ] && cp firebase.ts src/
+            [ -f "types.ts" ] && cp types.ts src/
+            [ -f "CreateLetterForm.tsx" ] && cp CreateLetterForm.tsx src/components/
+            [ -f "LetterCreatedSuccess.tsx" ] && cp LetterCreatedSuccess.tsx src/components/
+            [ -f "VictimView.tsx" ] && cp VictimView.tsx src/components/
+            [ -f "AdminTrackerView.tsx" ] && cp AdminTrackerView.tsx src/components/
+            [ -f "LanguageToggle.tsx" ] && cp LanguageToggle.tsx src/components/
+            [ -f "letterService.ts" ] && cp letterService.ts src/services/
+            [ -f "audio.ts" ] && cp audio.ts src/utils/
+            [ -f "i18n.ts" ] && cp i18n.ts src/utils/
+            [ -f "memes.ts" ] && cp memes.ts src/utils/
+          fi
 
       - name: Install dependencies
         run: npm install --legacy-peer-deps
@@ -36,7 +56,7 @@ jobs:
         env:
           GITHUB_PAGES: 'true'
           VITE_BASE_PATH: '/Love-test-website-/'
-        run: npm run build
+        run: npx vite build --base=/Love-test-website-/ && cp dist/index.html dist/404.html
 
       - name: Setup GitHub Pages
         uses: actions/configure-pages@v5
